@@ -8,6 +8,7 @@ const inter = Inter({ subsets: ['latin'] })
 export const metadata: Metadata = {
   title: 'ระบบการเรียนออนไลน์',
   description: 'แพลตฟอร์มการเรียนออนไลน์สำหรับติวเตอร์และนักเรียน',
+    generator: 'v0.dev'
 }
 
 export default function RootLayout({
