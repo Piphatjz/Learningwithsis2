@@ -63,6 +63,16 @@ export function YouTubePlayer({ videoId, onTimeUpdate, onStateChange }: YouTubeP
 
   useEffect(() => {
     if (isReady && playerRef.current && videoId) {
+      // ตรวจสอบว่า player ยังไม่ถูกสร้าง เพื่อป้องกันการสร้างซ้ำ
+      if (player) {
+        // หาก player มีอยู่แล้วและ videoId เปลี่ยนไป ให้ทำลาย player เก่าก่อน
+        if (player.timeInterval) {
+          clearInterval(player.timeInterval)
+        }
+        player.destroy()
+        setPlayer(null) // ตั้งค่า player เป็น null เพื่อให้สร้างใหม่
+      }
+
       const newPlayer = new window.YT.Player(playerRef.current, {
         height: "100%",
         width: "100%",
@@ -108,17 +118,18 @@ export function YouTubePlayer({ videoId, onTimeUpdate, onStateChange }: YouTubeP
     }
 
     return () => {
+      // Cleanup function: ทำลาย player เมื่อ component unmounts หรือ videoId เปลี่ยน
       if (player) {
         if (player.timeInterval) {
           clearInterval(player.timeInterval)
         }
         player.destroy()
+        setPlayer(null) // ตั้งค่า player เป็น null เพื่อให้แน่ใจว่าถูกทำลาย
       }
     }
-  }, [isReady, videoId, onStateChange, onTimeUpdate, player]) // เพิ่ม dependencies
-  // player ถูกเพิ่มเข้ามาเพื่อให้ useEffect ทำงานเมื่อ player instance เปลี่ยน
-  // onStateChange และ onTimeUpdate ถูกเพิ่มเข้ามาเพื่อให้ React รู้ว่าฟังก์ชันเหล่านี้เป็น dependency
-  // หากฟังก์ชันเหล่านี้เปลี่ยน (ซึ่งไม่ควรบ่อยนักถ้าเป็น useCallback) useEffect จะ re-run
+  }, [isReady, videoId, onStateChange, onTimeUpdate]) // ลบ 'player' ออกจาก dependency array
+  // onStateChange และ onTimeUpdate ควรเป็น stable functions (เช่น ห่อด้วย useCallback ใน parent component)
+  // เพื่อป้องกันการ re-render ที่ไม่จำเป็นของ useEffect นี้
 
   return <div ref={playerRef} className="w-full h-full" />
 }
