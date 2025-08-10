@@ -1,8 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react" // ลบ useRef
+import { useState, useEffect, useCallback, useRef } from "react" // เพิ่ม useRef
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-// import { Button } from "@/components/ui/button" // ลบ Button
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -107,6 +106,13 @@ export default function StudentLearningPlatform() {
   const [currentWatchTime, setCurrentWatchTime] = useState(0)
   const [currentVideoDuration, setCurrentVideoDuration] = useState(0)
 
+  // ใช้ useRef เพื่อเก็บ studentProgress ล่าสุดโดยไม่ทำให้ useCallback re-render
+  const studentProgressRef = useRef<StudentProgress[]>([])
+
+  useEffect(() => {
+    studentProgressRef.current = studentProgress // อัปเดต ref เมื่อ studentProgress เปลี่ยน
+  }, [studentProgress])
+
   useEffect(() => {
     const fetchInitialData = async () => {
       setLoadingLessons(true)
@@ -153,76 +159,80 @@ export default function StudentLearningPlatform() {
   }, [selectedStudentId])
 
   // อัพเดทความคืบหน้าการดูวิดีโอ
-  const handleTimeUpdate = async (currentTime: number, duration: number) => {
-    if (selectedStudentId === null || !currentLesson || duration === 0) return
+  const handleTimeUpdate = useCallback(
+    async (currentTime: number, duration: number) => {
+      if (selectedStudentId === null || !currentLesson || duration === 0) return
 
-    const maxAllowedJumpSeconds = 10 // อนุญาตให้ข้ามได้ไม่เกิน 10 วินาทีจากเวลาที่บันทึกไว้ล่าสุด
+      const maxAllowedJumpSeconds = 10 // อนุญาตให้ข้ามได้ไม่เกิน 10 วินาทีจากเวลาที่บันทึกไว้ล่าสุด
 
-    const existingProgress = studentProgress.find((p) => p.lesson_id === currentLesson.id)
-    const lastSavedWatchTime = existingProgress?.watch_time || 0 // เวลาที่บันทึกไว้ล่าสุดใน DB
+      // ใช้ ref เพื่อเข้าถึง studentProgress ล่าสุด
+      const existingProgress = studentProgressRef.current.find((p) => p.lesson_id === currentLesson.id)
+      const lastSavedWatchTime = existingProgress?.watch_time || 0 // เวลาที่บันทึกไว้ล่าสุดใน DB
 
-    const roundedCurrentTime = Math.round(currentTime)
-    setCurrentVideoDuration(duration) // อัปเดต duration สำหรับ UI
+      const roundedCurrentTime = Math.round(currentTime)
+      setCurrentVideoDuration(duration) // อัปเดต duration สำหรับ UI
 
-    // อัปเดต UI state ด้วยเวลาจริงที่ผู้เล่นรายงาน (สำหรับแถบความคืบหน้าใต้เครื่องเล่น)
-    setCurrentWatchTime(roundedCurrentTime)
+      // อัปเดต UI state ด้วยเวลาจริงที่ผู้เล่นรายงาน (สำหรับแถบความคืบหน้าใต้เครื่องเล่น)
+      setCurrentWatchTime(roundedCurrentTime)
 
-    // --- Logic สำหรับกำหนด watch_time ที่จะส่งไป DB (Anti-cheat สำหรับความคืบหน้า) ---
-    let watchTimeForDb = lastSavedWatchTime // เริ่มต้นด้วยเวลาที่บันทึกไว้ล่าสุด
+      // --- Logic สำหรับกำหนด watch_time ที่จะส่งไป DB (Anti-cheat สำหรับความคืบหน้า) ---
+      let watchTimeForDb = lastSavedWatchTime // เริ่มต้นด้วยเวลาที่บันทึกไว้ล่าสุด
 
-    // หากเวลาปัจจุบันที่ผู้เล่นรายงานสูงกว่าเวลาที่บันทึกไว้ล่าสุด
-    if (roundedCurrentTime > lastSavedWatchTime) {
-      // คำนวณเวลาสูงสุดที่อนุญาตให้บันทึกได้ในการอัปเดตครั้งนี้
-      const allowedAdvanceTime = lastSavedWatchTime + maxAllowedJumpSeconds
-      // บันทึกเวลาที่ดูจริง แต่ไม่เกินเวลาที่อนุญาตให้ข้าม
-      watchTimeForDb = Math.min(roundedCurrentTime, allowedAdvanceTime)
-    }
-    // ถ้า roundedCurrentTime <= lastSavedWatchTime (เช่น ผู้ใช้ย้อนกลับหรือดูซ้ำ)
-    // watchTimeForDb จะยังคงเป็น lastSavedWatchTime (ไม่ลดลง)
-    // ซึ่งหมายความว่าความคืบหน้าใน DB จะไม่ลดลง แต่ UI จะแสดงเวลาจริง
-
-    // ตรวจสอบให้แน่ใจว่า watchTimeForDb ไม่เกินระยะเวลาทั้งหมดของวิดีโอ
-    watchTimeForDb = Math.min(watchTimeForDb, Math.round(duration))
-
-    // --- Logic สำหรับกำหนดสถานะการเรียนจบ (Completed Status) ---
-    // บทเรียนจะถือว่า completed หาก watchTimeForDb (เวลาที่ดูอย่างถูกต้อง) ถึง 90%
-    // และหากเคย completed แล้ว ให้คงสถานะ completed ไว้
-    let isCompleted = existingProgress?.completed || false
-    if (!isCompleted && (watchTimeForDb / duration) * 100 >= 90) {
-      isCompleted = true
-    }
-
-    const progressData: Omit<StudentProgress, "id" | "student_id" | "lesson_id"> = {
-      watch_time: watchTimeForDb,
-      total_duration: Math.round(duration),
-      completed: isCompleted,
-      last_watched: new Date().toISOString(),
-    }
-
-    // อัพเดท DB ก็ต่อเมื่อมีการเปลี่ยนแปลงที่สำคัญ หรือสถานะการเรียนจบเปลี่ยนไป
-    const shouldUpdateDb =
-      !existingProgress ||
-      Math.abs(existingProgress.watch_time - watchTimeForDb) >= 5 || // อัพเดททุก 5 วินาทีของเวลาที่ดู
-      existingProgress.completed !== isCompleted // อัพเดทหากสถานะการเรียนจบเปลี่ยนไป
-
-    if (shouldUpdateDb) {
-      const { data, error } = await db.updateProgress(selectedStudentId, currentLesson.id, progressData)
-      if (error) {
-        console.error("Error updating progress:", error)
-      } else if (data) {
-        // อัพเดท state ของ studentProgress ด้วยข้อมูลที่ได้จาก DB
-        setStudentProgress((prev) => {
-          const existingIndex = prev.findIndex((p) => p.lesson_id === data.lesson_id)
-          if (existingIndex >= 0) {
-            const updated = [...prev]
-            updated[existingIndex] = data
-            return updated
-          }
-          return [...prev, data]
-        })
+      // หากเวลาปัจจุบันที่ผู้เล่นรายงานสูงกว่าเวลาที่บันทึกไว้ล่าสุด
+      if (roundedCurrentTime > lastSavedWatchTime) {
+        // คำนวณเวลาสูงสุดที่อนุญาตให้บันทึกได้ในการอัปเดตครั้งนี้
+        const allowedAdvanceTime = lastSavedWatchTime + maxAllowedJumpSeconds
+        // บันทึกเวลาที่ดูจริง แต่ไม่เกินเวลาที่อนุญาตให้ข้าม
+        watchTimeForDb = Math.min(roundedCurrentTime, allowedAdvanceTime)
       }
-    }
-  }
+      // ถ้า roundedCurrentTime <= lastSavedWatchTime (เช่น ผู้ใช้ย้อนกลับหรือดูซ้ำ)
+      // watchTimeForDb จะยังคงเป็น lastSavedWatchTime (ไม่ลดลง)
+      // ซึ่งหมายความว่าความคืบหน้าใน DB จะไม่ลดลง แต่ UI จะแสดงเวลาจริง
+
+      // ตรวจสอบให้แน่ใจว่า watchTimeForDb ไม่เกินระยะเวลาทั้งหมดของวิดีโอ
+      watchTimeForDb = Math.min(watchTimeForDb, Math.round(duration))
+
+      // --- Logic สำหรับกำหนดสถานะการเรียนจบ (Completed Status) ---
+      // บทเรียนจะถือว่า completed หาก watchTimeForDb (เวลาที่ดูอย่างถูกต้อง) ถึง 90%
+      // และหากเคย completed แล้ว ให้คงสถานะ completed ไว้
+      let isCompleted = existingProgress?.completed || false
+      if (!isCompleted && (watchTimeForDb / duration) * 100 >= 90) {
+        isCompleted = true
+      }
+
+      const progressData: Omit<StudentProgress, "id" | "student_id" | "lesson_id"> = {
+        watch_time: watchTimeForDb,
+        total_duration: Math.round(duration),
+        completed: isCompleted,
+        last_watched: new Date().toISOString(),
+      }
+
+      // อัพเดท DB ก็ต่อเมื่อมีการเปลี่ยนแปลงที่สำคัญ หรือสถานะการเรียนจบเปลี่ยนไป
+      const shouldUpdateDb =
+        !existingProgress ||
+        Math.abs(existingProgress.watch_time - watchTimeForDb) >= 5 || // อัพเดททุก 5 วินาทีของเวลาที่ดู
+        existingProgress.completed !== isCompleted // อัพเดทหากสถานะการเรียนจบเปลี่ยนไป
+
+      if (shouldUpdateDb) {
+        const { data, error } = await db.updateProgress(selectedStudentId, currentLesson.id, progressData)
+        if (error) {
+          console.error("Error updating progress:", error)
+        } else if (data) {
+          // อัพเดท state ของ studentProgress ด้วยข้อมูลที่ได้จาก DB (ใช้ functional update)
+          setStudentProgress((prev) => {
+            const existingIndex = prev.findIndex((p) => p.lesson_id === data.lesson_id)
+            if (existingIndex >= 0) {
+              const updated = [...prev]
+              updated[existingIndex] = data
+              return updated
+            }
+            return [...prev, data]
+          })
+        }
+      }
+    },
+    [selectedStudentId, currentLesson], // Dependencies สำหรับ useCallback (studentProgress ถูกจัดการด้วย ref)
+  )
 
   // เลือกบทเรียน
   const selectLesson = (lesson: Lesson) => {

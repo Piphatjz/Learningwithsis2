@@ -7,7 +7,8 @@ interface YouTubePlayerInstance {
   getCurrentTime: () => number
   getDuration: () => number
   destroy: () => void
-  timeInterval?: NodeJS.Timeout // Custom property to store interval ID
+  // Note: timeInterval is a custom property we add for cleanup
+  timeInterval?: NodeJS.Timeout
 }
 
 interface YouTubePlayerEvent {
@@ -42,7 +43,7 @@ interface YouTubePlayerProps {
 
 export function YouTubePlayer({ videoId, onTimeUpdate, onStateChange }: YouTubePlayerProps) {
   const playerRef = useRef<HTMLDivElement>(null)
-  const [player, setPlayer] = useState<YouTubePlayerInstance | null>(null)
+  // No need for `player` state here, manage instance locally within useEffect
   const [isReady, setIsReady] = useState(false)
 
   useEffect(() => {
@@ -62,18 +63,11 @@ export function YouTubePlayer({ videoId, onTimeUpdate, onStateChange }: YouTubeP
   }, [])
 
   useEffect(() => {
-    if (isReady && playerRef.current && videoId) {
-      // ตรวจสอบว่า player ยังไม่ถูกสร้าง เพื่อป้องกันการสร้างซ้ำ
-      if (player) {
-        // หาก player มีอยู่แล้วและ videoId เปลี่ยนไป ให้ทำลาย player เก่าก่อน
-        if (player.timeInterval) {
-          clearInterval(player.timeInterval)
-        }
-        player.destroy()
-        setPlayer(null) // ตั้งค่า player เป็น null เพื่อให้สร้างใหม่
-      }
+    let currentInterval: NodeJS.Timeout | undefined // Local variable for interval ID
+    let currentNewPlayer: YouTubePlayerInstance | null = null // Local variable for player instance
 
-      const newPlayer = new window.YT.Player(playerRef.current, {
+    if (isReady && playerRef.current && videoId) {
+      currentNewPlayer = new window.YT.Player(playerRef.current, {
         height: "100%",
         width: "100%",
         videoId: videoId,
@@ -86,50 +80,44 @@ export function YouTubePlayer({ videoId, onTimeUpdate, onStateChange }: YouTubeP
           playsinline: 1,
         },
         events: {
-          onReady: (event: YouTubePlayerEvent) => {
-            console.log("Player ready")
+          onReady: () => {
+            console.log("Player ready for videoId:", videoId)
           },
           onStateChange: (event: YouTubePlayerEvent) => {
             onStateChange?.(event.data)
 
             if (event.data === window.YT.PlayerState.PLAYING) {
               // เริ่มติดตามเวลา
-              const interval = setInterval(() => {
-                if (event.target && typeof event.target.getCurrentTime === "function") {
-                  const currentTime = event.target.getCurrentTime()
-                  const duration = event.target.getDuration()
+              currentInterval = setInterval(() => {
+                if (currentNewPlayer && typeof currentNewPlayer.getCurrentTime === "function") {
+                  const currentTime = currentNewPlayer.getCurrentTime()
+                  const duration = currentNewPlayer.getDuration()
                   onTimeUpdate?.(currentTime, duration)
                 }
               }, 1000)
-
-              // เก็บ interval ใน player object
-              event.target.timeInterval = interval
             } else {
               // หยุดติดตามเวลา
-              if (event.target.timeInterval) {
-                clearInterval(event.target.timeInterval)
+              if (currentInterval) {
+                clearInterval(currentInterval)
+                currentInterval = undefined // Clear the interval ID
               }
             }
           },
         },
       })
-
-      setPlayer(newPlayer)
     }
 
     return () => {
-      // Cleanup function: ทำลาย player เมื่อ component unmounts หรือ videoId เปลี่ยน
-      if (player) {
-        if (player.timeInterval) {
-          clearInterval(player.timeInterval)
-        }
-        player.destroy()
-        setPlayer(null) // ตั้งค่า player เป็น null เพื่อให้แน่ใจว่าถูกทำลาย
+      // Cleanup function: This closes over `currentNewPlayer` and `currentInterval`
+      // from this specific effect run.
+      if (currentInterval) {
+        clearInterval(currentInterval)
+      }
+      if (currentNewPlayer) {
+        currentNewPlayer.destroy()
       }
     }
-  }, [isReady, videoId, onStateChange, onTimeUpdate]) // ลบ 'player' ออกจาก dependency array
-  // onStateChange และ onTimeUpdate ควรเป็น stable functions (เช่น ห่อด้วย useCallback ใน parent component)
-  // เพื่อป้องกันการ re-render ที่ไม่จำเป็นของ useEffect นี้
+  }, [isReady, videoId, onStateChange, onTimeUpdate]) // Dependencies are stable callbacks and props
 
   return <div ref={playerRef} className="w-full h-full" />
 }
